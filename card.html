@@ -1,0 +1,60 @@
+{% autoescape true %}
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=840">
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 840px; background: #fff; }
+    body { padding: 32px; color: #171717; font: 17px "Noto Sans CJK SC", "Microsoft YaHei", "PingFang SC", sans-serif; }
+    .live + .live { border-top: 1px solid #ddd; padding-top: 28px; margin-top: 32px; }
+    h1 { font-size: 25px; line-height: 1.5; margin: 0 0 10px; overflow-wrap: anywhere; }
+    .caption { color: #777; font-size: 13px; line-height: 1.8; }
+    .query { display: inline-block; margin-left: 12px; color: #777; }
+    .day { margin-top: 28px; }
+    h2 { font-size: 21px; line-height: 1.5; margin: 0 0 13px; font-weight: 700; }
+    .day-number { color: #777; font-size: 15px; margin-right: 10px; }
+    .time { display: block; margin-top: 4px; color: #777; font-size: 14px; font-weight: 400; }
+    .row { border-left: 5px solid #e94164; padding: 17px 18px; margin: 11px 0; background: #fafafa; display: flex; align-items: center; gap: 18px; }
+    .row-main { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px 16px; }
+    .seat { font-weight: 600; font-size: 18px; line-height: 1.55; overflow-wrap: anywhere; }
+    .account { font-size: 16px; line-height: 1.55; overflow-wrap: anywhere; color: #333; }
+    .badge { flex-shrink: 0; border: 1px solid #e94164; color: #e94164; padding: 7px 12px; font-size: 15px; font-weight: 700; line-height: 1.4; text-align: center; }
+    .paid .badge, .unpaid .badge, .won .badge { background: #e94164; color: #fff; }
+    .lost, .other { border-left-color: #777; }
+    .lost .badge, .other .badge { border-color: #ededed; background: #ededed; color: #666; }
+    .lost .account, .lost .seat { color: #777; }
+    .cached { color: #888; font-size: 11px; }
+    .sessions { flex-basis: 100%; color: #777; font-size: 13px; line-height: 1.6; }
+    footer { margin-top: 26px; color: #888; font-size: 11px; line-height: 1.8; }
+  </style>
+</head>
+<body>
+  {% for live in lives %}
+  <section class="live">
+    <h1>{{ live.title }}</h1>
+    <div class="caption">
+      {% if live.draw %}抽選結果発表 &nbsp; {{ live.draw }}{% endif %}
+      {% if live_query %}<span class="query">主动查询</span>{% elif test %}<span class="query">离线样例</span>{% endif %}
+    </div>
+    {% for day in live.days %}
+    <section class="day">
+      <h2><span class="day-number">{{ day.label }}</span>{{ day.date }}{% if day.time %}<span class="time">{{ day.time }}</span>{% endif %}</h2>
+      {% for row in day.rows %}
+      <div class="row {{ row.tone }}">
+        <div class="row-main"><span class="seat">{{ row.seat }}</span><span class="account">{{ row.account }}</span>{% if row.sessions %}<span class="sessions">{{ row.sessions }}</span>{% endif %}{% if row.cached %}<span class="cached">最近缓存</span>{% endif %}</div>
+        <span class="badge">{% if row.tone == 'paid' %}当選・入金完了{% elif row.tone == 'unpaid' %}当選・未入金{% elif row.tone == 'won' %}当選{% elif row.tone == 'pending' %}抽選待ち{% elif row.tone == 'lost' %}落選{% else %}{{ row.label }}{% endif %}</span>
+      </div>
+      {% endfor %}
+    </section>
+    {% endfor %}
+  </section>
+  {% endfor %}
+  <footer>
+    <div>ASOBI TICKET · {{ created_at }} · 账号已打码</div>
+    {% if has_cached %}<div>“最近缓存”为对应账号最近一次成功查询的结果。</div>{% endif %}
+  </footer>
+</body>
+</html>
+{% endautoescape %}

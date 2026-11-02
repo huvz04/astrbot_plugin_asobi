@@ -1,0 +1,34 @@
+{
+  "host": {
+    "description": "Webhook 监听地址",
+    "type": "string",
+    "default": "127.0.0.1",
+    "hint": "与检测工具运行在同一主机时保留默认值；远程或 Docker 接入可改为 0.0.0.0，并配置端口映射、防火墙或反向代理。"
+  },
+  "port": {
+    "description": "Webhook 监听端口",
+    "type": "int",
+    "default": 8766,
+    "hint": "独立于 AstrBot WebUI 的端口，取值 1 到 65535；需确保端口未被其他进程占用。"
+  },
+  "path": {
+    "description": "Webhook 接收路径",
+    "type": "string",
+    "default": "/asobi/webhook",
+    "hint": "以 / 开头的 URL 路径，须与 Asb7k-tools 的 webhook.url 一致。"
+  },
+  "token": {
+    "description": "Webhook 共享密钥（可选）",
+    "type": "string",
+    "default": "",
+    "secret": true,
+    "hint": "本地使用可留空，正常监听且不校验请求头。填写时须至少 16 个可见 ASCII 字符，不能含空白，并在检测工具请求头填写 Authorization: Bearer <相同密钥>。"
+  },
+  "recipients": {
+    "description": "通知收件会话",
+    "type": "list",
+    "default": [],
+    "_special": "umo",
+    "hint": "选择完整 UMO，或在目标会话发送 /asobi会话 后复制返回值，不能只填 QQ 号。无效项会被忽略，合法项继续使用，配置提醒见 /asobi状态。无有效收件人仍返回 202 并跳过发送，后续绑定不补发旧通知。所有收件人都会收到全部监控账号的新通知，不按邮箱分流；每条通知沿用接收时的收件人。"
+  }
+}

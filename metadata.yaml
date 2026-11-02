@@ -1,0 +1,7 @@
+name: astrbot_plugin_asobi
+display_name: ASOBI Webhook 通知
+desc: 接收 Asb7k-tools 的 Webhook，将抽选结果汇总为打码图卡，转发到指定 AstrBot 会话。
+version: v1.3.0
+author: huvz04
+repo: https://github.com/huvz04/astrbot_plugin_asobi
+astrbot_version: ">=4.16,<5"
