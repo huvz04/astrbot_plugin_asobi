@@ -37,6 +37,7 @@
     <div class="caption">
       {% if live.draw %}抽選結果発表 &nbsp; {{ live.draw }}{% endif %}
       {% if live_query %}<span class="query">主动查询</span>{% elif test %}<span class="query">离线样例</span>{% endif %}
+      {% if page_count and page_count > 1 %}<span class="query">{{ page_number }} / {{ page_count }}</span>{% endif %}
     </div>
     {% for day in live.days %}
     <section class="day">

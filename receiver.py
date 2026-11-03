@@ -343,6 +343,10 @@ class WebhookReceiver:
             if self.prepare_callback is not None
             else f"{event['title']}\n\n{event['message']}"
         )
+        if message is None:
+            # Filtering may expire a queued result. Complete it without sending
+            # or replaying it if recipients are added later.
+            return None
         failure = None
         for index, recipient in pending:
             try:

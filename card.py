@@ -53,6 +53,9 @@ def _redactor(event, records):
     accounts = {str(event.get("account") or "")}
     accounts.update(str(row.get("account") or "") for row in records)
     accounts.discard("")
+    accounts.update(
+        unicodedata.normalize("NFKC", account) for account in tuple(accounts)
+    )
 
     def redact(value, limit=None):
         text = str(value or "")
@@ -158,11 +161,33 @@ def _display_time(value):
     value = str(value or "")
     try:
         stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        if stamp.tzinfo is not None:
-            return stamp.astimezone(JST).strftime("%Y/%m/%d %H:%M JST")
     except ValueError:
-        pass
-    return value
+        match = re.fullmatch(
+            r"\s*(\d{4})[年/](\d{1,2})[月/](\d{1,2})日?\s+(\d{1,2}):(\d{2})\s*",
+            value,
+        )
+        if not match:
+            return value
+        try:
+            stamp = datetime(*map(int, match.groups()))
+        except ValueError:
+            return value
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        return value.replace("-", "/")
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=JST)
+    return stamp.astimezone(JST).strftime("%Y/%m/%d %H:%M JST")
+
+
+def _live_title(value):
+    title = " ".join(unicodedata.normalize("NFKC", str(value or "")).split())
+    # HTML queries append the reception name; API queries use only the tour name.
+    parts = title.rsplit(" / ", 1)
+    if len(parts) == 2 and re.search(
+        r"(?:先行|受付|一般発売|一般販売)(?:\s*[（(].*[）)])?$", parts[1]
+    ):
+        return parts[0]
+    return title
 
 
 def build_card(event):
@@ -174,16 +199,32 @@ def build_card(event):
     batches = {}
     has_cached = False
     batch = event.get("batch") if isinstance(event.get("batch"), dict) else {}
+    batch_title = _live_title(batch.get("title"))
     for row in records:
-        title = str(batch.get("title") or row.get("title") or "Live 抽选结果")
-        draw = _display_time(
-            batch.get("lottery_at_iso")
-            or batch.get("lottery_at")
-            or row.get("lottery_at_iso")
-            or row.get("lottery_at")
-            or ""
-        )
-        group = batches.setdefault((title, draw), {})
+        # A batch is a fallback for legacy rows, never an override for another Live.
+        title = _live_title(row.get("title")) or batch_title or "Live 抽选结果"
+        live = batches.setdefault(title, {"draws": set(), "days": {}})
+        draw = row.get("lottery_at_iso") or row.get("lottery_at")
+        if draw:
+            draw_values = [draw]
+        elif title == batch_title:
+            times = batch.get("lottery_times")
+            draw_values = (
+                [value for value in times if isinstance(value, str) and value]
+                if isinstance(times, list)
+                else []
+            )
+            if not draw_values:
+                draw_values = [
+                    batch.get("lottery_at_iso")
+                    or batch.get("lottery_at")
+                    or batch.get("lottery_date")
+                    or ""
+                ]
+        else:
+            draw_values = []
+        live["draws"].update(_display_time(value) for value in draw_values if value)
+        group = live["days"]
         kind, day_date, explicit = _day_info(row)
         starts = _start_times(row)
         start = (
@@ -218,7 +259,8 @@ def build_card(event):
             }
         )
     lives = []
-    for (title, draw), groups in batches.items():
+    for title, live in batches.items():
+        groups = live["days"]
         dated = sorted({group["date"] for group in groups.values() if group["date"]})
         # Explicit DAY labels anchor numbering when only part of a Live is known.
         offsets = {
@@ -261,7 +303,7 @@ def build_card(event):
         lives.append(
             {
                 "title": redact(title, 180),
-                "draw": redact(_display_time(draw), 100),
+                "draw": redact(" / ".join(sorted(live["draws"])), 200),
                 "days": days,
             }
         )

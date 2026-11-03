@@ -1,15 +1,68 @@
 import asyncio
+import re
+from pathlib import Path
 
+from aiohttp import ClientConnectionError
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star, StarTools
 
 from .card import CARD_TEMPLATE, build_card, fallback_text
+from .pagination import CardTooLargeError, paginate_card
 from .receiver import (
     ERROR_MESSAGES,
     PlatformNotFoundError,
     WebhookReceiver,
 )
+from .scope import filter_today_event
+
+RENDER_PAGE_TIMEOUT = 30
+RENDER_TOTAL_TIMEOUT = 60
+
+
+class InvalidRenderedImageError(ValueError):
+    """The renderer returned an error page or an unusable image path."""
+
+
+def _rendered_image_path(value):
+    # Some AstrBot releases save HTTP error bodies as .jpg without checking the
+    # response status. Do not let those files reach the messaging platform.
+    if not isinstance(value, (str, Path)) or not str(value).strip():
+        raise InvalidRenderedImageError
+    if re.match(r"^[a-z][a-z0-9+.-]*://", str(value), re.IGNORECASE):
+        raise InvalidRenderedImageError
+    path = Path(value)
+    with path.open("rb") as image:
+        header = image.read(16)
+        image.seek(0, 2)
+        size = image.tell()
+    is_png = header.startswith(b"\x89PNG\r\n\x1a\n") and header[12:16] == b"IHDR"
+    is_jpeg = header.startswith(b"\xff\xd8\xff")
+    is_gif = header[:6] in (b"GIF87a", b"GIF89a")
+    is_webp = header[:4] == b"RIFF" and header[8:12] == b"WEBP"
+    if size <= 16 or not (is_png or is_jpeg or is_gif or is_webp):
+        raise InvalidRenderedImageError
+    return str(path)
+
+
+def _render_failure(exc):
+    """Describe known failures without exposing URLs, account data or tokens."""
+    if isinstance(exc, asyncio.TimeoutError):
+        return "渲染超时（单页 30 秒、整组 60 秒），请检查 AstrBot 的 t2i 服务"
+    if isinstance(exc, CardTooLargeError):
+        return "结果超过图片分页大小限制，保留完整文字结果"
+    if isinstance(exc, InvalidRenderedImageError):
+        return "渲染服务未返回有效图片，请检查 AstrBot 的 t2i 服务"
+    if isinstance(exc, (FileNotFoundError, PermissionError, IsADirectoryError)):
+        return "渲染图片文件不存在或无法读取，请检查 AstrBot 临时目录"
+    if isinstance(exc, ClientConnectionError):
+        return "无法连接渲染服务，请检查 AstrBot 的 t2i 配置和网络"
+    status = re.search(r"\bHTTP\s*([45]\d{2})\b", str(exc), re.IGNORECASE)
+    if status:
+        return f"渲染服务返回 HTTP {status[1]}，请检查 AstrBot 的 t2i 服务"
+    if isinstance(exc, (TypeError, AttributeError)):
+        return f"渲染接口调用失败（{type(exc).__name__}），请检查 AstrBot 版本兼容性"
+    return f"渲染失败（{type(exc).__name__}），请检查 AstrBot 渲染日志"
 
 
 class AsobiWebhookPlugin(Star):
@@ -17,6 +70,7 @@ class AsobiWebhookPlugin(Star):
         super().__init__(context)
         self.config = config
         self.receiver = None
+        self.render_status = "尚未渲染"
 
     async def initialize(self):
         data_dir = StarTools.get_data_dir("astrbot_plugin_asobi")
@@ -36,33 +90,54 @@ class AsobiWebhookPlugin(Star):
         )
 
     async def _prepare_message(self, event):
+        event = filter_today_event(event)
+        if event is None:
+            logger.info("ASOBI 通知没有今天已开奖的结果，已跳过")
+            return None
         view = build_card(event)
         if view is not None:
             try:
-                path = await asyncio.wait_for(
-                    self.html_render(
-                        CARD_TEMPLATE,
-                        view,
-                        return_url=False,
-                        options={
-                            "type": "png",
-                            "quality": None,
-                            "full_page": True,
-                            "viewport_width": 840,
-                            "viewport_height": 1,
-                            "scale": "css",
-                        },
-                    ),
-                    timeout=30,
+                pages = paginate_card(view)
+                message = await asyncio.wait_for(
+                    self._render_pages(pages), timeout=RENDER_TOTAL_TIMEOUT
                 )
-                if not isinstance(path, str) or not path.strip():
-                    raise ValueError("渲染结果缺少图片路径")
-                return MessageChain().file_image(path)
+                self.render_status = (
+                    "最近一次渲染成功"
+                    if len(pages) == 1
+                    else f"最近一次渲染成功，共 {len(pages)} 张"
+                )
+                return message
             except Exception as exc:  # noqa: BLE001 - Rendering must not block text delivery.
-                logger.warning(
-                    f"ASOBI 图片渲染失败（{type(exc).__name__}），改为发送打码文字通知"
-                )
+                self.render_status = _render_failure(exc) + "；已改为打码文字通知"
+                logger.warning(f"ASOBI 图片渲染状态：{self.render_status}")
         return MessageChain().message(fallback_text(event))
+
+    async def _render_pages(self, pages):
+        paths = []
+        for page in pages:
+            path = await asyncio.wait_for(
+                self.html_render(
+                    CARD_TEMPLATE,
+                    page,
+                    return_url=False,
+                    options={
+                        "type": "png",
+                        "quality": None,
+                        "full_page": True,
+                        "viewport_width": 840,
+                        "viewport_height": 1,
+                        "scale": "css",
+                    },
+                ),
+                timeout=RENDER_PAGE_TIMEOUT,
+            )
+            paths.append(_rendered_image_path(path))
+        # Prepare every page before any recipient is sent a message. A failure
+        # on a later page must not send half the result followed by a full text.
+        message = MessageChain()
+        for path in paths:
+            message.file_image(path)
+        return message
 
     async def _send_message(self, recipient, message):
         if isinstance(message, str):
@@ -98,6 +173,7 @@ class AsobiWebhookPlugin(Star):
             f"鉴权：{'已启用' if settings['token'] else '未启用'}\n"
             f"待发通知：{queue['pending']} 条\n"
             f"队列状态：{error}\n"
+            f"图片状态：{self.render_status}\n"
             "开奖时间与检测由 Asb7k-tools 后台监控负责。"
         )
 
